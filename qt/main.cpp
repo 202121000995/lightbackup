@@ -215,6 +215,7 @@ private:
     struct Task {
         QString name;
         bool enabled = false;
+        bool dateFolder = true;
         QString time = QStringLiteral("23:55:55");
         QString sourcePath;
         QString destination;
@@ -230,6 +231,7 @@ private:
     QTableWidget *logTable = nullptr;
     QComboBox *destinationCombo = nullptr;
     QCheckBox *enabledCheck = nullptr;
+    QCheckBox *dateFolderCheck = nullptr;
     QLineEdit *timeEdit = nullptr;
     QLineEdit *pathEdit = nullptr;
     QPushButton *statusButton = nullptr;
@@ -244,6 +246,56 @@ private:
                 return it.value().toString();
         }
         return QString();
+    }
+
+    QString destinationEnvValue(const Destination &destination, const QString &suffix) const {
+        for (auto it = destination.environment.constBegin();
+             it != destination.environment.constEnd(); ++it) {
+            if (it.key().endsWith("_" + suffix, Qt::CaseInsensitive))
+                return it.value().toString();
+        }
+        return QString();
+    }
+
+    QString envPrefix(const QString &remote) const {
+        QString result;
+        for (const QChar ch : remote.toUpper()) {
+            if (ch.isLetterOrNumber())
+                result.append(ch);
+            else
+                result.append('_');
+        }
+        while (result.contains("__")) result.replace("__", "_");
+        result = result.trimmed();
+        if (result.startsWith('_')) result.remove(0, 1);
+        if (result.endsWith('_')) result.chop(1);
+        return result.isEmpty() ? QStringLiteral("BACKUP") : result;
+    }
+
+    QString fileSafeName(const QString &text) const {
+        QString result = text.trimmed().toLower();
+        result.replace(QRegularExpression("[^a-z0-9\\u4e00-\\u9fa5_-]+"), "-");
+        while (result.contains("--")) result.replace("--", "-");
+        if (result.startsWith('-')) result.remove(0, 1);
+        if (result.endsWith('-')) result.chop(1);
+        return result.isEmpty() ? QStringLiteral("destination") : result;
+    }
+
+    QString pathSafeSegment(const QString &text) const {
+        QString result = text.trimmed();
+        result.replace(QRegularExpression("[\\\\/:*?\"<>|]+"), "_");
+        while (result.contains("__")) result.replace("__", "_");
+        return result.isEmpty() ? QStringLiteral("task") : result;
+    }
+
+    QString appendRemotePath(const QString &base, const QString &child) const {
+        QString cleanedBase = base.trimmed();
+        QString cleanedChild = child.trimmed();
+        while (cleanedBase.endsWith('/')) cleanedBase.chop(1);
+        while (cleanedChild.startsWith('/')) cleanedChild.remove(0, 1);
+        if (cleanedBase.isEmpty()) return cleanedChild;
+        if (cleanedChild.isEmpty()) return cleanedBase;
+        return cleanedBase + "/" + cleanedChild;
     }
 
     void loadDestinationConfigs() {
@@ -308,6 +360,7 @@ private:
                 Task task;
                 task.name = object.value("name").toString();
                 task.enabled = object.value("enabled").toBool(false);
+                task.dateFolder = object.value("date_folder").toBool(true);
                 task.time = object.value("time").toString("23:55:55");
                 task.sourcePath = object.value("source_path").toString();
                 task.destination = object.value("destination").toString();
@@ -329,6 +382,7 @@ private:
             QJsonObject object;
             object.insert("name", task.name);
             object.insert("enabled", task.enabled);
+            object.insert("date_folder", task.dateFolder);
             object.insert("time", task.time);
             object.insert("source_path", task.sourcePath);
             object.insert("destination", task.destination);
@@ -393,11 +447,13 @@ private:
     }
 
     void loadSelectedTask() {
-        if (!taskTable || !enabledCheck || !timeEdit || !pathEdit || !destinationCombo) return;
+        if (!taskTable || !enabledCheck || !dateFolderCheck ||
+            !timeEdit || !pathEdit || !destinationCombo) return;
         const int row = taskTable->currentRow();
         if (row < 0 || row >= tasks.size()) return;
         const Task &task = tasks.at(row);
         enabledCheck->setChecked(task.enabled);
+        dateFolderCheck->setChecked(task.dateFolder);
         timeEdit->setText(task.time);
         pathEdit->setText(task.sourcePath);
         destinationCombo->setCurrentIndex(destinationCombo->findText(task.destination));
@@ -419,12 +475,224 @@ private:
         }
         Task &task = tasks[row];
         task.enabled = enabledCheck->isChecked();
+        task.dateFolder = dateFolderCheck->isChecked();
         task.time = timeText;
         task.sourcePath = QDir::toNativeSeparators(pathEdit->text().trimmed());
         task.destination = destinationCombo->currentText();
         refreshTaskTable(row);
         saveTasks();
         appendLog(task.name, QStringLiteral("任务设置已保存"));
+        return true;
+    }
+
+    bool editDestinationDialog(int row) {
+        const bool creating = row < 0 || row >= destinations.size();
+        Destination initial;
+        if (!creating) initial = destinations.at(row);
+
+        QDialog dialog(this);
+        dialog.setWindowTitle(creating ? QStringLiteral("新建目的地")
+                                       : QStringLiteral("编辑目的地"));
+        dialog.resize(520, 520);
+        auto layout = new QVBoxLayout(&dialog);
+        auto form = new QFormLayout;
+        form->setLabelAlignment(Qt::AlignRight);
+        form->setHorizontalSpacing(12);
+        form->setVerticalSpacing(8);
+
+        auto nameEdit = new QLineEdit(creating ? QStringLiteral("新目的地") : initial.name);
+        auto typeCombo = new QComboBox;
+        typeCombo->addItems(QStringList()
+                            << "local" << "ftp" << "webdav" << "awss3" << "cfr2" << "qiniu");
+        typeCombo->setCurrentText(creating ? "ftp" : initial.type);
+        auto remoteEdit = new QLineEdit(creating ? "new_backup" : initial.remote);
+        auto remotePathEdit = new QLineEdit(creating ? "backups/001" : initial.path);
+        auto localPathEdit = new QLineEdit(creating ? "D:\\Backups" : initial.localPath);
+        auto addressEdit = new QLineEdit(creating ? "192.168.1.10" :
+            (initial.type == "ftp" ? destinationEnvValue(initial, "HOST") :
+             initial.type == "webdav" ? destinationEnvValue(initial, "URL") :
+             initial.type == "awss3" ? destinationEnvValue(initial, "REGION") :
+             destinationEnvValue(initial, "ENDPOINT")));
+        auto portEdit = new QLineEdit(creating ? "21" : destinationEnvValue(initial, "PORT"));
+        auto userEdit = new QLineEdit(creating ? "backup_user" : destinationEnvValue(initial, "USER"));
+        auto passEdit = new QLineEdit(creating ? QStringLiteral("请填入 rclone obscure 生成的密码")
+                                               : destinationEnvValue(initial, "PASS"));
+        auto accessKeyEdit = new QLineEdit(creating ? "access_key" :
+                                           destinationEnvValue(initial, "ACCESS_KEY_ID"));
+        auto secretKeyEdit = new QLineEdit(creating ? "secret_key" :
+                                           destinationEnvValue(initial, "SECRET_ACCESS_KEY"));
+        auto vendorEdit = new QLineEdit(creating ? "other" : destinationEnvValue(initial, "VENDOR"));
+
+        form->addRow(QStringLiteral("名称"), nameEdit);
+        form->addRow(QStringLiteral("协议"), typeCombo);
+        form->addRow(QStringLiteral("remote 名称"), remoteEdit);
+        form->addRow(QStringLiteral("远端目录/Bucket"), remotePathEdit);
+        form->addRow(QStringLiteral("本地目录"), localPathEdit);
+        form->addRow(QStringLiteral("地址/Endpoint/区域"), addressEdit);
+        form->addRow(QStringLiteral("端口"), portEdit);
+        form->addRow(QStringLiteral("用户"), userEdit);
+        form->addRow(QStringLiteral("密码/密钥密码"), passEdit);
+        form->addRow(QStringLiteral("Access Key"), accessKeyEdit);
+        form->addRow(QStringLiteral("Secret Key"), secretKeyEdit);
+        form->addRow(QStringLiteral("WebDAV Vendor"), vendorEdit);
+        layout->addLayout(form);
+
+        auto hint = new QLabel(QStringLiteral(
+            "同协议的多个目的地必须使用不同的名称、remote 名称和环境变量前缀。\n"
+            "保存时程序会根据 remote 名称自动生成 RCLONE_CONFIG_ 前缀。"));
+        hint->setWordWrap(true);
+        hint->setObjectName("HintText");
+        layout->addWidget(hint);
+
+        auto buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
+        buttons->button(QDialogButtonBox::Save)->setText(QStringLiteral("保存"));
+        buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
+        layout->addWidget(buttons);
+
+        auto updateVisibility = [=]() {
+            const QString type = typeCombo->currentText();
+            const bool local = type == "local";
+            const bool ftp = type == "ftp";
+            const bool webdav = type == "webdav";
+            const bool objectStore = type == "awss3" || type == "cfr2" || type == "qiniu";
+            remoteEdit->setEnabled(!local);
+            remotePathEdit->setEnabled(!local);
+            localPathEdit->setEnabled(local);
+            addressEdit->setEnabled(!local);
+            portEdit->setEnabled(ftp);
+            userEdit->setEnabled(ftp || webdav);
+            passEdit->setEnabled(ftp || webdav);
+            accessKeyEdit->setEnabled(objectStore);
+            secretKeyEdit->setEnabled(objectStore);
+            vendorEdit->setEnabled(webdav);
+            if (type == "awss3" && addressEdit->text().trimmed().isEmpty())
+                addressEdit->setText("ap-east-1");
+            if (type == "cfr2" && addressEdit->text().trimmed().isEmpty())
+                addressEdit->setText("https://your_account_id.r2.cloudflarestorage.com");
+            if (type == "qiniu" && addressEdit->text().trimmed().isEmpty())
+                addressEdit->setText("https://s3-cn-east-1.qiniucs.com");
+        };
+        connect(typeCombo, &QComboBox::currentTextChanged, &dialog, updateVisibility);
+        updateVisibility();
+
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
+            const QString name = nameEdit->text().trimmed();
+            const QString type = typeCombo->currentText();
+            const QString remote = remoteEdit->text().trimmed();
+            if (name.isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("名称不能为空。"));
+                return;
+            }
+            if (type != "local" && remote.isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("非本地目的地必须填写 remote 名称。"));
+                return;
+            }
+            if (type == "local" && localPathEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("本地目的地必须填写本地目录。"));
+                return;
+            }
+            if (type != "local" && addressEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("地址、Endpoint 或区域不能为空。"));
+                return;
+            }
+            dialog.accept();
+        });
+
+        if (dialog.exec() != QDialog::Accepted) return false;
+
+        QJsonObject root;
+        root.insert("_important", QStringLiteral(
+            "同协议多个目的地必须分别使用不同文件、name、rclone.remote 和 RCLONE_CONFIG_前缀。"));
+        QJsonArray rules;
+        rules.append(QStringLiteral("本文件由界面生成；复制后请修改 name 和 remote。"));
+        rules.append(QStringLiteral("环境变量前缀由 remote 自动生成，请勿与其他目的地重复。"));
+        rules.append(QStringLiteral("每个目的地应填写自己的地址、账号、密钥和目录。"));
+        root.insert("_unique_rules", rules);
+        const QString type = typeCombo->currentText();
+        root.insert("name", nameEdit->text().trimmed());
+        root.insert("type", type);
+
+        if (type == "local") {
+            root.insert("local_path", QDir::toNativeSeparators(localPathEdit->text().trimmed()));
+            QJsonObject copy;
+            copy.insert("mode", "copy");
+            copy.insert("create_if_missing", true);
+            copy.insert("overwrite", true);
+            root.insert("copy", copy);
+        } else {
+            const QString remote = remoteEdit->text().trimmed();
+            const QString prefix = "RCLONE_CONFIG_" + envPrefix(remote) + "_";
+            QJsonObject env;
+            if (type == "ftp") {
+                env.insert(prefix + "TYPE", "ftp");
+                env.insert(prefix + "HOST", addressEdit->text().trimmed());
+                env.insert(prefix + "USER", userEdit->text().trimmed());
+                env.insert(prefix + "PASS", passEdit->text().trimmed());
+                env.insert(prefix + "PORT", portEdit->text().trimmed().isEmpty()
+                           ? "21" : portEdit->text().trimmed());
+            } else if (type == "webdav") {
+                env.insert(prefix + "TYPE", "webdav");
+                env.insert(prefix + "URL", addressEdit->text().trimmed());
+                env.insert(prefix + "VENDOR", vendorEdit->text().trimmed().isEmpty()
+                           ? "other" : vendorEdit->text().trimmed());
+                env.insert(prefix + "USER", userEdit->text().trimmed());
+                env.insert(prefix + "PASS", passEdit->text().trimmed());
+            } else {
+                env.insert(prefix + "TYPE", "s3");
+                env.insert(prefix + "PROVIDER",
+                           type == "awss3" ? "AWS" : type == "cfr2" ? "Cloudflare" : "Qiniu");
+                env.insert(prefix + "ACCESS_KEY_ID", accessKeyEdit->text().trimmed());
+                env.insert(prefix + "SECRET_ACCESS_KEY", secretKeyEdit->text().trimmed());
+                if (type == "awss3")
+                    env.insert(prefix + "REGION", addressEdit->text().trimmed());
+                else
+                    env.insert(prefix + "ENDPOINT", addressEdit->text().trimmed());
+                env.insert(prefix + "ACL", "private");
+            }
+            QJsonObject rclone;
+            rclone.insert("remote", remote);
+            rclone.insert("env", env);
+            QJsonArray flags;
+            for (const QString &flag : initial.flags) flags.append(flag);
+            rclone.insert("flags", flags);
+            root.insert("remote_path", remotePathEdit->text().trimmed());
+            root.insert("rclone", rclone);
+        }
+
+        QDir().mkpath(appDir + "/configs");
+        QString filePath = creating ? QString() : initial.filePath;
+        if (filePath.isEmpty()) {
+            filePath = appDir + "/configs/" + fileSafeName(nameEdit->text()) + ".json";
+            int suffix = 2;
+            while (QFileInfo::exists(filePath))
+                filePath = appDir + QString("/configs/%1-%2.json")
+                           .arg(fileSafeName(nameEdit->text())).arg(suffix++);
+        }
+
+        QSaveFile file(filePath);
+        if (!file.open(QFile::WriteOnly)) {
+            QMessageBox::warning(this, QStringLiteral("保存目的地"),
+                                 QStringLiteral("无法写入配置文件。"));
+            return false;
+        }
+        file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+        if (!file.commit()) {
+            QMessageBox::warning(this, QStringLiteral("保存目的地"),
+                                 QStringLiteral("保存配置文件失败。"));
+            return false;
+        }
+        loadDestinationConfigs();
+        populateDestinationControls();
+        const int newIndex = destinationIndex(nameEdit->text().trimmed());
+        if (destinationTable && newIndex >= 0) destinationTable->selectRow(newIndex);
+        appendLog(QStringLiteral("配置"),
+                  creating ? QStringLiteral("已新建目的地配置")
+                           : QStringLiteral("已保存目的地配置"));
         return true;
     }
 
@@ -489,19 +757,21 @@ private:
         form->setVerticalSpacing(8);
         enabledCheck = new QCheckBox(QStringLiteral("开启备份"));
         form->addWidget(enabledCheck, 0, 0);
-        form->addWidget(label(QStringLiteral("定时")), 0, 1);
+        dateFolderCheck = new QCheckBox(QStringLiteral("按日期目录"));
+        form->addWidget(dateFolderCheck, 0, 1);
+        form->addWidget(label(QStringLiteral("定时")), 0, 2);
         timeEdit = new QLineEdit("23:55:55");
-        form->addWidget(timeEdit, 0, 2);
+        form->addWidget(timeEdit, 0, 3);
         auto testTask = new QPushButton(QStringLiteral("测试"));
-        form->addWidget(testTask, 0, 3);
+        form->addWidget(testTask, 0, 4);
         form->addWidget(label(QStringLiteral("备份目标路径")), 1, 0);
         pathEdit = new QLineEdit;
-        form->addWidget(pathEdit, 1, 1, 1, 2);
+        form->addWidget(pathEdit, 1, 1, 1, 3);
         auto choosePath = new QPushButton(QStringLiteral("选择"));
-        form->addWidget(choosePath, 1, 3);
+        form->addWidget(choosePath, 1, 4);
         form->addWidget(label(QStringLiteral("备份目的地")), 2, 0);
         destinationCombo = new QComboBox;
-        form->addWidget(destinationCombo, 2, 1, 1, 3);
+        form->addWidget(destinationCombo, 2, 1, 1, 4);
         layout->addLayout(form);
         populateDestinationControls();
         refreshTaskTable();
@@ -570,12 +840,15 @@ private:
         top->addWidget(label(QStringLiteral("目的地配置库"), "SectionTitle"));
         top->addStretch();
         auto addDest = new QPushButton(QStringLiteral("+ 新建"));
+        auto editDest = new QPushButton(QStringLiteral("编辑"));
         auto refreshDest = new QPushButton(QStringLiteral("刷新"));
         auto openDest = new QPushButton(QStringLiteral("打开目录"));
         addDest->setFixedWidth(70);
+        editDest->setFixedWidth(70);
         refreshDest->setFixedWidth(70);
         openDest->setFixedWidth(92);
         top->addWidget(addDest);
+        top->addWidget(editDest);
         top->addWidget(refreshDest);
         top->addWidget(openDest);
         layout->addLayout(top);
@@ -621,10 +894,7 @@ private:
             if (comboIndex >= 0) destinationCombo->setCurrentIndex(comboIndex);
         });
         connect(destinationTable, &QTableWidget::cellDoubleClicked, this, [=](int row, int) {
-            if (row < 0 || row >= destinations.size()) return;
-            if (!QDesktopServices::openUrl(QUrl::fromLocalFile(destinations.at(row).filePath)))
-                QMessageBox::warning(this, QStringLiteral("打开配置"),
-                                     QStringLiteral("无法打开目的地配置文件。"));
+            editDestinationDialog(row);
         });
         connect(refreshDest, &QPushButton::clicked, this, [=]() {
             loadDestinationConfigs();
@@ -632,40 +902,15 @@ private:
             appendLog(QStringLiteral("配置"),
                       QStringLiteral("目的地配置已刷新，共 %1 个").arg(destinations.size()));
         });
-        connect(addDest, &QPushButton::clicked, this, [=]() {
-            QDir().mkpath(appDir + "/configs");
-            QString filePath = appDir + "/configs/new-destination.json";
-            int suffix = 2;
-            while (QFileInfo::exists(filePath))
-                filePath = appDir + QString("/configs/new-destination-%1.json").arg(suffix++);
-            QJsonObject env;
-            env.insert("RCLONE_CONFIG_NEW_BACKUP_TYPE", "ftp");
-            env.insert("RCLONE_CONFIG_NEW_BACKUP_HOST", "192.168.1.10");
-            env.insert("RCLONE_CONFIG_NEW_BACKUP_USER", "backup_user");
-            env.insert("RCLONE_CONFIG_NEW_BACKUP_PASS", "请填入 rclone obscure 生成的密码");
-            env.insert("RCLONE_CONFIG_NEW_BACKUP_PORT", "21");
-            QJsonObject rclone;
-            rclone.insert("remote", "new_backup");
-            rclone.insert("env", env);
-            rclone.insert("flags", QJsonArray());
-            QJsonObject root;
-            root.insert("_important", QStringLiteral(
-                "复制本文件创建同协议目的地时，name、remote、RCLONE_CONFIG_前缀必须各自不同。"));
-            root.insert("name", QStringLiteral("新目的地"));
-            root.insert("type", "ftp");
-            root.insert("remote_path", "backups/001");
-            root.insert("rclone", rclone);
-            QSaveFile file(filePath);
-            if (file.open(QFile::WriteOnly)) {
-                file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-                file.commit();
-                loadDestinationConfigs();
-                populateDestinationControls();
-                appendLog(QStringLiteral("配置"), QStringLiteral("已创建目的地配置模板"));
-                if (!QDesktopServices::openUrl(QUrl::fromLocalFile(filePath)))
-                    QMessageBox::information(this, QStringLiteral("新建目的地"),
-                                             QStringLiteral("配置模板已创建在 configs 目录。"));
+        connect(addDest, &QPushButton::clicked, this, [=]() { editDestinationDialog(-1); });
+        connect(editDest, &QPushButton::clicked, this, [=]() {
+            const int row = destinationTable->currentRow();
+            if (row < 0 || row >= destinations.size()) {
+                QMessageBox::information(this, QStringLiteral("编辑目的地"),
+                                         QStringLiteral("请先选择一个目的地。"));
+                return;
             }
+            editDestinationDialog(row);
         });
         return frame;
     }
@@ -793,6 +1038,9 @@ private:
         }
 
         QString target;
+        const QString archivePath = appendRemotePath(
+            QDate::currentDate().toString("yyyy-MM-dd"),
+            pathSafeSegment(task.name));
         if (destination.type == "local") {
             target = destination.localPath;
             if (target.isEmpty()) {
@@ -800,6 +1048,8 @@ private:
                 startNextTask();
                 return;
             }
+            if (task.dateFolder)
+                target = QDir::toNativeSeparators(QDir(target).filePath(archivePath));
             QString sourceCheck = QDir::cleanPath(
                 QDir::fromNativeSeparators(task.sourcePath)).toLower();
             QString targetCheck = QDir::cleanPath(
@@ -819,7 +1069,10 @@ private:
                 startNextTask();
                 return;
             }
-            target = destination.remote + ":" + destination.path;
+            QString remotePath = destination.path;
+            if (task.dateFolder)
+                remotePath = appendRemotePath(remotePath, archivePath);
+            target = destination.remote + ":" + remotePath;
         }
 
         QStringList arguments;

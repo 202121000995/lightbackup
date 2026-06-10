@@ -4,6 +4,7 @@
     {
       "name": "任务 1",
       "enabled": false,
+      "date_folder": true,
       "time": "23:55:55",
       "source_path": "C:\\BackupSource",
       "destination": "本地备份"
@@ -11,6 +12,7 @@
     {
       "name": "任务 2",
       "enabled": false,
+      "date_folder": true,
       "time": "02:30:00",
       "source_path": "C:\\BackupSource",
       "destination": "FTP1"
