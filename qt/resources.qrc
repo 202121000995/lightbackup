@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="style.qss">style.qss</file>
+    <file alias="lightbackup.ico">../assets/lightbackup.ico</file>
+  </qresource>
+</RCC>

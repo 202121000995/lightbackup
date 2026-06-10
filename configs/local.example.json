@@ -1,0 +1,16 @@
+{
+  "_important": "多个本地备份目的地也必须使用多个独立 JSON 文件。",
+  "_unique_rules": [
+    "name 必须不同，例如：本地D盘、本地移动硬盘。",
+    "local_path 必须填写各自真实的目标文件夹，例如 D:\\Backups、E:\\Archive。",
+    "请勿把 local_path 设置为正在备份的源目录或源目录的子目录，以免循环复制。"
+  ],
+  "name": "本地备份",
+  "type": "local",
+  "local_path": "D:\\Backups",
+  "copy": {
+    "mode": "copy",
+    "create_if_missing": true,
+    "overwrite": true
+  }
+}

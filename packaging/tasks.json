@@ -1,0 +1,19 @@
+{
+  "_comment": "初始任务均为关闭状态。请在界面中选择源文件夹和目的地，保存后测试。",
+  "tasks": [
+    {
+      "name": "任务 1",
+      "enabled": false,
+      "time": "23:55:55",
+      "source_path": "C:\\BackupSource",
+      "destination": "本地备份"
+    },
+    {
+      "name": "任务 2",
+      "enabled": false,
+      "time": "02:30:00",
+      "source_path": "C:\\BackupSource",
+      "destination": "FTP1"
+    }
+  ]
+}

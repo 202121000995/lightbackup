@@ -1,0 +1,25 @@
+{
+  "_important": "同为 Cloudflare R2 的多个账号、区域 Endpoint 或 Bucket 必须使用多个独立 JSON 文件。",
+  "_unique_rules": [
+    "name 必须不同，例如：R2-账号A、R2-账号B。",
+    "rclone.remote 必须不同，例如：r2_account_a、r2_account_b。",
+    "环境变量前缀必须对应 remote：r2_account_a 对应 RCLONE_CONFIG_R2_ACCOUNT_A_*。",
+    "不同账号必须分别修改 ACCESS_KEY_ID、SECRET_ACCESS_KEY 和 ENDPOINT。",
+    "Bucket 和目录填写在 remote_path，不能把另一个目的地的 Bucket 配置混用。"
+  ],
+  "name": "Cloudflare R2 示例目的地",
+  "type": "cfr2",
+  "remote_path": "your-bucket/backups/project-a",
+  "rclone": {
+    "remote": "r2_backup",
+    "env": {
+      "RCLONE_CONFIG_R2_BACKUP_TYPE": "s3",
+      "RCLONE_CONFIG_R2_BACKUP_PROVIDER": "Cloudflare",
+      "RCLONE_CONFIG_R2_BACKUP_ACCESS_KEY_ID": "your_r2_access_key_id",
+      "RCLONE_CONFIG_R2_BACKUP_SECRET_ACCESS_KEY": "your_r2_secret_access_key",
+      "RCLONE_CONFIG_R2_BACKUP_ENDPOINT": "https://your_account_id.r2.cloudflarestorage.com",
+      "RCLONE_CONFIG_R2_BACKUP_ACL": "private"
+    },
+    "flags": []
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "_important": "同为 WebDAV 的多个地址或账号必须使用多个独立 JSON 文件。",
+  "_unique_rules": [
+    "name 必须不同，例如：WebDAV-A、WebDAV-B。",
+    "rclone.remote 必须不同，例如：webdav_a、webdav_b。",
+    "环境变量前缀必须对应 remote：webdav_a 对应 RCLONE_CONFIG_WEBDAV_A_*。",
+    "不同服务器或账号分别修改 URL、USER、PASS；远端目录填写在 remote_path。"
+  ],
+  "name": "WebDAV 示例目的地",
+  "type": "webdav",
+  "remote_path": "backup/project-a",
+  "rclone": {
+    "remote": "webdav_backup",
+    "env": {
+      "RCLONE_CONFIG_WEBDAV_BACKUP_TYPE": "webdav",
+      "RCLONE_CONFIG_WEBDAV_BACKUP_URL": "https://dav.example.com/remote.php/dav/files/your_user",
+      "RCLONE_CONFIG_WEBDAV_BACKUP_VENDOR": "other",
+      "RCLONE_CONFIG_WEBDAV_BACKUP_USER": "your_webdav_user",
+      "RCLONE_CONFIG_WEBDAV_BACKUP_PASS": "your_obscured_password"
+    },
+    "flags": []
+  }
+}

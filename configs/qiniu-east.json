@@ -1,0 +1,23 @@
+{
+  "_important": "这是七牛华东目的地。不同区域必须使用不同文件、name、remote、环境变量前缀和 ENDPOINT。",
+  "_unique_rules": [
+    "本文件 remote=qiniu_east，所以环境变量只能使用 RCLONE_CONFIG_QINIU_EAST_*。",
+    "华东 ENDPOINT 为 s3-cn-east-1.qiniucs.com；不要与华南配置混用。",
+    "ACCESS_KEY_ID、SECRET_ACCESS_KEY、Bucket 和目录应填写华东目的地自己的参数。"
+  ],
+  "name": "七牛华东",
+  "type": "qiniu",
+  "remote_path": "bucket-a",
+  "rclone": {
+    "remote": "qiniu_east",
+    "env": {
+      "RCLONE_CONFIG_QINIU_EAST_TYPE": "s3",
+      "RCLONE_CONFIG_QINIU_EAST_PROVIDER": "Qiniu",
+      "RCLONE_CONFIG_QINIU_EAST_ACCESS_KEY_ID": "your_qiniu_east_access_key",
+      "RCLONE_CONFIG_QINIU_EAST_SECRET_ACCESS_KEY": "your_qiniu_east_secret_key",
+      "RCLONE_CONFIG_QINIU_EAST_ENDPOINT": "https://s3-cn-east-1.qiniucs.com",
+      "RCLONE_CONFIG_QINIU_EAST_ACL": "private"
+    },
+    "flags": []
+  }
+}

@@ -1,0 +1,32 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.pdb
+*.lib
+*.log
+.zig-cache/
+zig-global-cache/
+
+# Legacy prototypes kept locally, not part of the current Qt release.
+app.py
+win7-backup.spec
+native/
+
+# Local build toolchains and downloads; too large for the source repository.
+tools/Qt/
+tools/zig-macos-aarch64-0.11.0/
+tools/rclone-v*/
+tools/*.zip
+tools/*.tar.xz
+tools/aqt/
+
+# Old or intermediate release folders.
+release/
+release-qt/
+release-qt512/
+release-ready/LightBackup/
+
+# Keep the current distributable package and checksum list.
+!release-ready/
+!release-ready/LightBackup-Win7-x86.zip
+!release-ready/SHA256SUMS.txt

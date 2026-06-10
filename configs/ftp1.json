@@ -1,0 +1,22 @@
+{
+  "_important": "这是第一个 FTP 目的地。复制本文件创建第二个 FTP 时，name、rclone.remote 和全部 RCLONE_CONFIG_ 前缀必须一起修改。",
+  "_unique_rules": [
+    "本文件 remote=ftp1_backup，所以环境变量只能使用 RCLONE_CONFIG_FTP1_BACKUP_*。",
+    "另一个 FTP 应使用不同值，例如 remote=ftp2_backup 和 RCLONE_CONFIG_FTP2_BACKUP_*。",
+    "HOST、PORT、USER、PASS 必须填写这个 FTP 自己的连接参数。"
+  ],
+  "name": "FTP1",
+  "type": "ftp",
+  "remote_path": "backups/001",
+  "rclone": {
+    "remote": "ftp1_backup",
+    "env": {
+      "RCLONE_CONFIG_FTP1_BACKUP_TYPE": "ftp",
+      "RCLONE_CONFIG_FTP1_BACKUP_HOST": "127.0.0.1",
+      "RCLONE_CONFIG_FTP1_BACKUP_USER": "your_ftp1_user",
+      "RCLONE_CONFIG_FTP1_BACKUP_PASS": "your_ftp1_obscured_password",
+      "RCLONE_CONFIG_FTP1_BACKUP_PORT": "21"
+    },
+    "flags": []
+  }
+}
