@@ -34,6 +34,7 @@ LightBackup/LightBackup.exe
 - 目的地配置库刷新、打开目录、新建、编辑
 - 右侧选择目的地后自动带入当前任务的目的地下拉框
 - 双击目的地配置行可直接编辑常用连接参数
+- 目的地编辑窗口会按协议只显示需要填写的参数，避免混填
 - 内置 `rclone.exe`
 - 支持本地复制、FTP、WebDAV、Cloudflare R2、AWS S3、七牛对象存储
 
@@ -71,6 +72,7 @@ README.txt                 用户说明
 - `RCLONE_CONFIG_...` 环境变量前缀
 
 每个示例配置都带有 `_important` 和 `_unique_rules` 字段，方便忘记规则时直接看配置文件。
+切换协议时，编辑窗口只显示当前协议需要的字段：本地只显示本地目录，FTP 只显示主机、端口、用户和密码，WebDAV 只显示 URL、用户、密码和 Vendor，对象存储只显示 Bucket/目录、区域或 Endpoint、Access Key 和 Secret Key。
 
 ## 密码
 

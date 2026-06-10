@@ -493,7 +493,7 @@ private:
         QDialog dialog(this);
         dialog.setWindowTitle(creating ? QStringLiteral("新建目的地")
                                        : QStringLiteral("编辑目的地"));
-        dialog.resize(520, 520);
+        dialog.resize(520, 430);
         auto layout = new QVBoxLayout(&dialog);
         auto form = new QFormLayout;
         form->setLabelAlignment(Qt::AlignRight);
@@ -523,18 +523,28 @@ private:
                                            destinationEnvValue(initial, "SECRET_ACCESS_KEY"));
         auto vendorEdit = new QLineEdit(creating ? "other" : destinationEnvValue(initial, "VENDOR"));
 
+        auto remotePathLabel = new QLabel(QStringLiteral("远端目录"));
+        auto localPathLabel = new QLabel(QStringLiteral("本地目录"));
+        auto addressLabel = new QLabel(QStringLiteral("地址"));
+        auto portLabel = new QLabel(QStringLiteral("端口"));
+        auto userLabel = new QLabel(QStringLiteral("用户"));
+        auto passLabel = new QLabel(QStringLiteral("密码"));
+        auto accessKeyLabel = new QLabel(QStringLiteral("Access Key"));
+        auto secretKeyLabel = new QLabel(QStringLiteral("Secret Key"));
+        auto vendorLabel = new QLabel(QStringLiteral("WebDAV Vendor"));
+
         form->addRow(QStringLiteral("名称"), nameEdit);
         form->addRow(QStringLiteral("协议"), typeCombo);
         form->addRow(QStringLiteral("remote 名称"), remoteEdit);
-        form->addRow(QStringLiteral("远端目录/Bucket"), remotePathEdit);
-        form->addRow(QStringLiteral("本地目录"), localPathEdit);
-        form->addRow(QStringLiteral("地址/Endpoint/区域"), addressEdit);
-        form->addRow(QStringLiteral("端口"), portEdit);
-        form->addRow(QStringLiteral("用户"), userEdit);
-        form->addRow(QStringLiteral("密码/密钥密码"), passEdit);
-        form->addRow(QStringLiteral("Access Key"), accessKeyEdit);
-        form->addRow(QStringLiteral("Secret Key"), secretKeyEdit);
-        form->addRow(QStringLiteral("WebDAV Vendor"), vendorEdit);
+        form->addRow(remotePathLabel, remotePathEdit);
+        form->addRow(localPathLabel, localPathEdit);
+        form->addRow(addressLabel, addressEdit);
+        form->addRow(portLabel, portEdit);
+        form->addRow(userLabel, userEdit);
+        form->addRow(passLabel, passEdit);
+        form->addRow(accessKeyLabel, accessKeyEdit);
+        form->addRow(secretKeyLabel, secretKeyEdit);
+        form->addRow(vendorLabel, vendorEdit);
         layout->addLayout(form);
 
         auto hint = new QLabel(QStringLiteral(
@@ -549,28 +559,88 @@ private:
         buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
         layout->addWidget(buttons);
 
-        auto updateVisibility = [=]() {
+        auto setRowVisible = [=](QWidget *labelWidget, QWidget *fieldWidget, bool visible) {
+            if (labelWidget) labelWidget->setVisible(visible);
+            fieldWidget->setVisible(visible);
+        };
+
+        auto updateVisibility = [&, initializing = true]() mutable {
             const QString type = typeCombo->currentText();
             const bool local = type == "local";
             const bool ftp = type == "ftp";
             const bool webdav = type == "webdav";
             const bool objectStore = type == "awss3" || type == "cfr2" || type == "qiniu";
-            remoteEdit->setEnabled(!local);
-            remotePathEdit->setEnabled(!local);
-            localPathEdit->setEnabled(local);
-            addressEdit->setEnabled(!local);
-            portEdit->setEnabled(ftp);
-            userEdit->setEnabled(ftp || webdav);
-            passEdit->setEnabled(ftp || webdav);
-            accessKeyEdit->setEnabled(objectStore);
-            secretKeyEdit->setEnabled(objectStore);
-            vendorEdit->setEnabled(webdav);
-            if (type == "awss3" && addressEdit->text().trimmed().isEmpty())
-                addressEdit->setText("ap-east-1");
-            if (type == "cfr2" && addressEdit->text().trimmed().isEmpty())
-                addressEdit->setText("https://your_account_id.r2.cloudflarestorage.com");
-            if (type == "qiniu" && addressEdit->text().trimmed().isEmpty())
-                addressEdit->setText("https://s3-cn-east-1.qiniucs.com");
+
+            if (creating && !initializing) {
+                if (type == "local") {
+                    nameEdit->setText(QStringLiteral("本地备份"));
+                    remoteEdit->clear();
+                    remotePathEdit->clear();
+                    localPathEdit->setText("D:\\Backups");
+                    addressEdit->clear();
+                } else if (type == "ftp") {
+                    nameEdit->setText("FTP");
+                    remoteEdit->setText("ftp_backup");
+                    remotePathEdit->setText("backups/001");
+                    addressEdit->setText("192.168.1.10");
+                    portEdit->setText("21");
+                } else if (type == "webdav") {
+                    nameEdit->setText("WebDAV");
+                    remoteEdit->setText("webdav_backup");
+                    remotePathEdit->setText("backup/project-a");
+                    addressEdit->setText("https://dav.example.com/remote.php/dav/files/your_user");
+                    vendorEdit->setText("other");
+                } else if (type == "awss3") {
+                    nameEdit->setText("AWS S3");
+                    remoteEdit->setText("aws_s3_backup");
+                    remotePathEdit->setText("your-bucket/backups/project-a");
+                    addressEdit->setText("ap-east-1");
+                } else if (type == "cfr2") {
+                    nameEdit->setText("Cloudflare R2");
+                    remoteEdit->setText("r2_backup");
+                    remotePathEdit->setText("your-bucket/backups/project-a");
+                    addressEdit->setText("https://your_account_id.r2.cloudflarestorage.com");
+                } else if (type == "qiniu") {
+                    nameEdit->setText(QStringLiteral("七牛云"));
+                    remoteEdit->setText("qiniu_backup");
+                    remotePathEdit->setText("your-bucket/backups/project-a");
+                    addressEdit->setText("https://s3-cn-east-1.qiniucs.com");
+                }
+            }
+
+            remotePathLabel->setText(objectStore ? QStringLiteral("Bucket/目录")
+                                                 : QStringLiteral("远端目录"));
+            if (ftp) addressLabel->setText(QStringLiteral("FTP 主机"));
+            else if (webdav) addressLabel->setText(QStringLiteral("WebDAV URL"));
+            else if (type == "awss3") addressLabel->setText(QStringLiteral("AWS 区域"));
+            else if (type == "cfr2") addressLabel->setText(QStringLiteral("R2 Endpoint"));
+            else if (type == "qiniu") addressLabel->setText(QStringLiteral("七牛 Endpoint"));
+            passLabel->setText(webdav ? QStringLiteral("WebDAV 密码") : QStringLiteral("FTP 密码"));
+
+            remoteEdit->setPlaceholderText("例如 ftp_backup、qiniu_east");
+            remotePathEdit->setPlaceholderText(objectStore ? "例如 bucket-name/backups/project-a"
+                                                           : "例如 backups/project-a");
+            localPathEdit->setPlaceholderText("例如 D:\\Backups");
+            portEdit->setPlaceholderText("默认 21");
+            userEdit->setPlaceholderText(ftp ? "FTP 用户名" : "WebDAV 用户名");
+            passEdit->setPlaceholderText("建议填写 rclone obscure 生成的密码");
+            accessKeyEdit->setPlaceholderText("对象存储 Access Key");
+            secretKeyEdit->setPlaceholderText("对象存储 Secret Key");
+            vendorEdit->setPlaceholderText("通常填 other");
+
+            setRowVisible(form->labelForField(remoteEdit), remoteEdit, !local);
+            setRowVisible(remotePathLabel, remotePathEdit, !local);
+            setRowVisible(localPathLabel, localPathEdit, local);
+            setRowVisible(addressLabel, addressEdit, !local);
+            setRowVisible(portLabel, portEdit, ftp);
+            setRowVisible(userLabel, userEdit, ftp || webdav);
+            setRowVisible(passLabel, passEdit, ftp || webdav);
+            setRowVisible(accessKeyLabel, accessKeyEdit, objectStore);
+            setRowVisible(secretKeyLabel, secretKeyEdit, objectStore);
+            setRowVisible(vendorLabel, vendorEdit, webdav);
+
+            initializing = false;
+            dialog.adjustSize();
         };
         connect(typeCombo, &QComboBox::currentTextChanged, &dialog, updateVisibility);
         updateVisibility();
@@ -595,9 +665,55 @@ private:
                                      QStringLiteral("本地目的地必须填写本地目录。"));
                 return;
             }
-            if (type != "local" && addressEdit->text().trimmed().isEmpty()) {
+            if (type == "ftp" && addressEdit->text().trimmed().isEmpty()) {
                 QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
-                                     QStringLiteral("地址、Endpoint 或区域不能为空。"));
+                                     QStringLiteral("FTP 必须填写主机地址。"));
+                return;
+            }
+            if (type == "ftp" && userEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("FTP 必须填写用户。"));
+                return;
+            }
+            if (type == "ftp" && passEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("FTP 必须填写密码。"));
+                return;
+            }
+            if (type == "webdav" && addressEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("WebDAV 必须填写 URL。"));
+                return;
+            }
+            if (type == "webdav" && userEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("WebDAV 必须填写用户。"));
+                return;
+            }
+            if (type == "webdav" && passEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("WebDAV 必须填写密码。"));
+                return;
+            }
+            const bool objectStore = type == "awss3" || type == "cfr2" || type == "qiniu";
+            if (objectStore && remotePathEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("对象存储必须填写 Bucket/目录。"));
+                return;
+            }
+            if (objectStore && addressEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("对象存储必须填写区域或 Endpoint。"));
+                return;
+            }
+            if (objectStore && accessKeyEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("对象存储必须填写 Access Key。"));
+                return;
+            }
+            if (objectStore && secretKeyEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("对象存储必须填写 Secret Key。"));
                 return;
             }
             dialog.accept();
