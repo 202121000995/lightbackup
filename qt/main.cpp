@@ -156,9 +156,13 @@ public:
         body->addWidget(logCard());
 
         connect(saveAll, &QPushButton::clicked, this, [=]() {
-            if (taskTable && taskTable->currentRow() >= 0)
-                saveCurrentTask(false);
-            saveTasks();
+            if (taskTable && taskTable->currentRow() >= 0) {
+                if (!saveCurrentTask(false)) return;
+            } else if (!saveTasks()) {
+                QMessageBox::warning(this, QStringLiteral("保存设置"),
+                                     QStringLiteral("保存任务配置失败。"));
+                return;
+            }
             appendLog(QStringLiteral("设置"), QStringLiteral("任务设置已保存"));
             saveAll->setText(QStringLiteral("已保存"));
             saveAll->setProperty("saved", true);
@@ -473,12 +477,18 @@ private:
                                  QStringLiteral("定时时间格式应为 HH:mm:ss，例如 23:55:55。"));
             return false;
         }
+        const QString destinationName = destinationCombo->currentText().trimmed();
+        if (destinationName.isEmpty() || destinationIndex(destinationName) < 0) {
+            QMessageBox::warning(this, QStringLiteral("保存任务"),
+                                 QStringLiteral("请先选择有效的备份目的地。"));
+            return false;
+        }
         Task &task = tasks[row];
         task.enabled = enabledCheck->isChecked();
         task.dateFolder = dateFolderCheck->isChecked();
         task.time = timeText;
         task.sourcePath = QDir::toNativeSeparators(pathEdit->text().trimmed());
-        task.destination = destinationCombo->currentText();
+        task.destination = destinationName;
         refreshTaskTable(row);
         saveTasks();
         appendLog(task.name, QStringLiteral("任务设置已保存"));
@@ -515,11 +525,10 @@ private:
              destinationEnvValue(initial, "ENDPOINT")));
         auto portEdit = new QLineEdit(creating ? "21" : destinationEnvValue(initial, "PORT"));
         auto userEdit = new QLineEdit(creating ? "backup_user" : destinationEnvValue(initial, "USER"));
-        auto passEdit = new QLineEdit(creating ? QStringLiteral("请填入 rclone obscure 生成的密码")
-                                               : destinationEnvValue(initial, "PASS"));
-        auto accessKeyEdit = new QLineEdit(creating ? "access_key" :
+        auto passEdit = new QLineEdit(creating ? QString() : destinationEnvValue(initial, "PASS"));
+        auto accessKeyEdit = new QLineEdit(creating ? QString() :
                                            destinationEnvValue(initial, "ACCESS_KEY_ID"));
-        auto secretKeyEdit = new QLineEdit(creating ? "secret_key" :
+        auto secretKeyEdit = new QLineEdit(creating ? QString() :
                                            destinationEnvValue(initial, "SECRET_ACCESS_KEY"));
         auto vendorEdit = new QLineEdit(creating ? "other" : destinationEnvValue(initial, "VENDOR"));
 
@@ -584,27 +593,37 @@ private:
                     remotePathEdit->setText("backups/001");
                     addressEdit->setText("192.168.1.10");
                     portEdit->setText("21");
+                    userEdit->setText("backup_user");
+                    passEdit->clear();
                 } else if (type == "webdav") {
                     nameEdit->setText("WebDAV");
                     remoteEdit->setText("webdav_backup");
                     remotePathEdit->setText("backup/project-a");
                     addressEdit->setText("https://dav.example.com/remote.php/dav/files/your_user");
+                    userEdit->setText("backup_user");
+                    passEdit->clear();
                     vendorEdit->setText("other");
                 } else if (type == "awss3") {
                     nameEdit->setText("AWS S3");
                     remoteEdit->setText("aws_s3_backup");
                     remotePathEdit->setText("your-bucket/backups/project-a");
                     addressEdit->setText("ap-east-1");
+                    accessKeyEdit->clear();
+                    secretKeyEdit->clear();
                 } else if (type == "cfr2") {
                     nameEdit->setText("Cloudflare R2");
                     remoteEdit->setText("r2_backup");
                     remotePathEdit->setText("your-bucket/backups/project-a");
                     addressEdit->setText("https://your_account_id.r2.cloudflarestorage.com");
+                    accessKeyEdit->clear();
+                    secretKeyEdit->clear();
                 } else if (type == "qiniu") {
                     nameEdit->setText(QStringLiteral("七牛云"));
                     remoteEdit->setText("qiniu_backup");
                     remotePathEdit->setText("your-bucket/backups/project-a");
                     addressEdit->setText("https://s3-cn-east-1.qiniucs.com");
+                    accessKeyEdit->clear();
+                    secretKeyEdit->clear();
                 }
             }
 
@@ -659,6 +678,23 @@ private:
                 QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
                                      QStringLiteral("非本地目的地必须填写 remote 名称。"));
                 return;
+            }
+            const QString newPrefix = envPrefix(remote);
+            for (int i = 0; i < destinations.size(); ++i) {
+                if (!creating && i == row) continue;
+                const Destination &existing = destinations.at(i);
+                if (existing.name == name) {
+                    QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                         QStringLiteral("目的地名称不能重复。"));
+                    return;
+                }
+                if (type != "local" && existing.type != "local") {
+                    if (existing.remote == remote || envPrefix(existing.remote) == newPrefix) {
+                        QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                             QStringLiteral("目的地识别号不能重复。"));
+                        return;
+                    }
+                }
             }
             if (type == "local" && localPathEdit->text().trimmed().isEmpty()) {
                 QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
@@ -804,7 +840,24 @@ private:
         }
         loadDestinationConfigs();
         populateDestinationControls();
-        const int newIndex = destinationIndex(nameEdit->text().trimmed());
+        const QString savedName = nameEdit->text().trimmed();
+        if (!creating && initial.name != savedName) {
+            bool changed = false;
+            for (Task &task : tasks) {
+                if (task.destination == initial.name) {
+                    task.destination = savedName;
+                    changed = true;
+                }
+            }
+            if (changed) {
+                saveTasks();
+                refreshTaskTable(taskTable ? taskTable->currentRow() : -1);
+                loadSelectedTask();
+                appendLog(QStringLiteral("配置"),
+                          QStringLiteral("已同步更新引用该目的地的任务"));
+            }
+        }
+        const int newIndex = destinationIndex(savedName);
         if (destinationTable && newIndex >= 0) destinationTable->selectRow(newIndex);
         appendLog(QStringLiteral("配置"),
                   creating ? QStringLiteral("已新建目的地配置")
@@ -913,6 +966,11 @@ private:
             appendLog(task.name, QStringLiteral("已新建任务"));
         });
         connect(deleteTask, &QPushButton::clicked, this, [=]() {
+            if (currentProcess || !runQueue.isEmpty()) {
+                QMessageBox::information(this, QStringLiteral("删除任务"),
+                                         QStringLiteral("任务执行中不能删除任务，请先停止或等待执行完成。"));
+                return;
+            }
             const int row = taskTable->currentRow();
             if (row < 0 || row >= tasks.size()) {
                 QMessageBox::information(this, QStringLiteral("删除任务"),
