@@ -21,3 +21,6 @@ SHA256(release-ready/LightBackup/README.txt)= 0f12c0e14acd1a6edaf52577ee91a207df
 SHA256(release-ready/LightBackup/libgcc_s_dw2-1.dll)= aa8180b63a849e755323bb1abe364b654c0eed9b433738fc491e5b64c410ef76
 SHA256(release-ready/LightBackup/tasks.json)= 939e4813ab0c3067a2c2e814b3851a63cc29841cf3fc05b6b9856a154d17d838
 SHA256(release-ready/LightBackup/fonts/NotoSansCJKsc-Regular.otf)= 2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b
+SHA256(release-ready/LightBackup-Linux-amd64.tar.gz)= 92cf868d166cd93de6fe2701f80ad05feb834a3404d3f85fd496f9baa7c6064b
+SHA256(release-ready/install-linux.sh)= d0db39086b9c8f34edce7eb379bed6c8bd64e41525a2fdab081553dda6997100
+SHA256(release-ready/update-linux.sh)= 2991ce4e2c22d74e4737d0864dc6f468e48cb6582af34ac54ad2e09445ca6d13

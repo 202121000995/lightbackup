@@ -1,0 +1,16 @@
+[Unit]
+Description=LightBackup Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/lightbackup
+ExecStart=/usr/local/bin/lightbackup-server -addr :8080 -data-dir /opt/lightbackup
+Restart=on-failure
+RestartSec=5
+User=lightbackup
+Group=lightbackup
+
+[Install]
+WantedBy=multi-user.target
