@@ -85,6 +85,7 @@ type app struct {
 	currentCancel    context.CancelFunc
 	triggeredTimes   map[string]bool
 	wakeRunner       chan struct{}
+	cloudSessions    map[string]*cloudAuthSession
 }
 
 type stateResponse struct {
@@ -96,6 +97,39 @@ type stateResponse struct {
 	CurrentTask  string        `json:"current_task"`
 	RclonePath   string        `json:"rclone_path"`
 	DataDir      string        `json:"data_dir"`
+}
+
+type cloudAuthSession struct {
+	ID         string          `json:"id"`
+	Provider   string          `json:"provider"`
+	Name       string          `json:"name"`
+	Remote     string          `json:"remote"`
+	RemotePath string          `json:"remote_path"`
+	State      string          `json:"-"`
+	BaseArgs   []string        `json:"-"`
+	Question   *rcloneQuestion `json:"question,omitempty"`
+}
+
+type rcloneQuestion struct {
+	State  string       `json:"State"`
+	Option rcloneOption `json:"Option"`
+	Error  string       `json:"Error"`
+}
+
+type rcloneOption struct {
+	Name       string          `json:"Name"`
+	Help       string          `json:"Help"`
+	Default    any             `json:"Default"`
+	Examples   []rcloneExample `json:"Examples"`
+	Required   bool            `json:"Required"`
+	IsPassword bool            `json:"IsPassword"`
+	Type       string          `json:"Type"`
+	Exclusive  bool            `json:"Exclusive"`
+}
+
+type rcloneExample struct {
+	Value any    `json:"Value"`
+	Help  string `json:"Help"`
 }
 
 var timePattern = regexp.MustCompile(`^\d{2}:\d{2}:\d{2}$`)
@@ -125,6 +159,7 @@ func main() {
 		currentTaskIndex: -1,
 		triggeredTimes:   make(map[string]bool),
 		wakeRunner:       make(chan struct{}, 1),
+		cloudSessions:    make(map[string]*cloudAuthSession),
 	}
 	if err := application.loadAll(); err != nil {
 		log.Fatal(err)
@@ -142,6 +177,8 @@ func main() {
 	mux.HandleFunc("/api/reload", application.handleReload)
 	mux.HandleFunc("/api/destinations", application.handleDestinations)
 	mux.HandleFunc("/api/destinations/", application.handleDestinationByName)
+	mux.HandleFunc("/api/cloud/start", application.handleCloudStart)
+	mux.HandleFunc("/api/cloud/continue", application.handleCloudContinue)
 
 	server := &http.Server{
 		Addr:              *addr,
@@ -300,6 +337,10 @@ func parseDestination(fileName string, body []byte) (destination, error) {
 		d.Address = envValue(env, "HOST")
 	case "webdav":
 		d.Address = envValue(env, "URL")
+	case "drive":
+		d.Address = "Google Drive"
+	case "onedrive":
+		d.Address = "Microsoft OneDrive"
 	case "awss3":
 		d.Address = envValue(env, "REGION")
 	case "qiniu", "cfr2":
@@ -545,6 +586,219 @@ func (a *app) handleDestinationByName(w http.ResponseWriter, r *http.Request) {
 	}
 	a.appendLog("配置", "目的地配置已删除："+fileName)
 	a.writeJSON(w, a.snapshot())
+}
+
+func (a *app) handleCloudStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload struct {
+		Provider   string `json:"provider"`
+		Name       string `json:"name"`
+		Remote     string `json:"remote"`
+		RemotePath string `json:"remote_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	session, err := a.newCloudSession(payload.Provider, payload.Name, payload.Remote, payload.RemotePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	question, complete, err := a.runRcloneConfig(session, "", "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if complete {
+		if err := a.saveCloudDestination(session); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		a.writeJSON(w, map[string]any{"complete": true, "state": a.snapshot()})
+		return
+	}
+	session.Question = question
+	session.State = question.State
+	a.mu.Lock()
+	a.cloudSessions[session.ID] = session
+	a.mu.Unlock()
+	a.writeJSON(w, map[string]any{"complete": false, "session": session})
+}
+
+func (a *app) handleCloudContinue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload struct {
+		SessionID string `json:"session_id"`
+		Result    string `json:"result"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.mu.Lock()
+	session := a.cloudSessions[payload.SessionID]
+	a.mu.Unlock()
+	if session == nil {
+		http.Error(w, "授权会话不存在或已结束", http.StatusBadRequest)
+		return
+	}
+	question, complete, err := a.runRcloneConfig(session, session.State, payload.Result)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if complete {
+		a.mu.Lock()
+		delete(a.cloudSessions, payload.SessionID)
+		a.mu.Unlock()
+		if err := a.saveCloudDestination(session); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		a.writeJSON(w, map[string]any{"complete": true, "state": a.snapshot()})
+		return
+	}
+	session.Question = question
+	session.State = question.State
+	a.writeJSON(w, map[string]any{"complete": false, "session": session})
+}
+
+func (a *app) newCloudSession(provider, name, remote, remotePath string) (*cloudAuthSession, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider != "drive" && provider != "onedrive" {
+		return nil, errors.New("目前只支持 Google Drive 和 OneDrive")
+	}
+	remote = safeRemoteName(remote)
+	if remote == "" {
+		if provider == "drive" {
+			remote = "gdrive"
+		} else {
+			remote = "onedrive"
+		}
+	}
+	if name = strings.TrimSpace(name); name == "" {
+		if provider == "drive" {
+			name = "Google Drive"
+		} else {
+			name = "OneDrive"
+		}
+	}
+	remotePath = strings.Trim(strings.TrimSpace(remotePath), "/")
+	if remotePath == "" {
+		remotePath = "LightBackup"
+	}
+	baseArgs := []string{"config", "create", remote, provider}
+	if provider == "drive" {
+		baseArgs = append(baseArgs, "scope", "drive", "config_is_local", "false")
+	} else {
+		baseArgs = append(baseArgs, "config_is_local", "false")
+	}
+	return &cloudAuthSession{
+		ID:         fmt.Sprintf("%d", time.Now().UnixNano()),
+		Provider:   provider,
+		Name:       name,
+		Remote:     remote,
+		RemotePath: remotePath,
+		BaseArgs:   baseArgs,
+	}, nil
+}
+
+func (a *app) runRcloneConfig(session *cloudAuthSession, state, result string) (*rcloneQuestion, bool, error) {
+	configPath := a.rcloneConfigPath()
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return nil, false, err
+	}
+	args := append([]string{}, session.BaseArgs...)
+	args = append(args, "--config", configPath, "--non-interactive")
+	if state != "" {
+		args = append(args, "--continue", "--state", state, "--result", result)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, a.rclonePath, args...)
+	output, err := cmd.CombinedOutput()
+	_ = os.Chmod(configPath, 0600)
+	question, parseErr := parseRcloneQuestion(output)
+	if question != nil {
+		return question, false, nil
+	}
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return nil, false, errors.New(message)
+	}
+	if parseErr == nil && len(bytes.TrimSpace(output)) > 0 {
+		return nil, true, nil
+	}
+	return nil, true, nil
+}
+
+func parseRcloneQuestion(output []byte) (*rcloneQuestion, error) {
+	trimmed := bytes.TrimSpace(output)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	start := bytes.IndexByte(trimmed, '{')
+	end := bytes.LastIndexByte(trimmed, '}')
+	if start < 0 || end < start {
+		return nil, errors.New("rclone did not return a JSON question")
+	}
+	var question rcloneQuestion
+	if err := json.Unmarshal(trimmed[start:end+1], &question); err != nil {
+		return nil, err
+	}
+	if question.State == "" {
+		return nil, nil
+	}
+	return &question, nil
+}
+
+func (a *app) saveCloudDestination(session *cloudAuthSession) error {
+	root := map[string]any{
+		"_important":  "本目的地由云盘授权向导生成；OAuth token 保存在 rclone 配置文件中。",
+		"name":        session.Name,
+		"type":        session.Provider,
+		"remote_path": session.RemotePath,
+		"rclone": map[string]any{
+			"remote": session.Remote,
+			"env": map[string]string{
+				"RCLONE_CONFIG": a.rcloneConfigPath(),
+			},
+			"flags": []string{},
+		},
+	}
+	fileName := safeFileName(session.Name)
+	if fileName == "" {
+		fileName = session.Provider + ".json"
+	}
+	path := filepath.Join(a.dataDir, "configs", fileName)
+	if fileExists(path) {
+		base := strings.TrimSuffix(fileName, ".json")
+		for i := 2; ; i++ {
+			candidate := filepath.Join(a.dataDir, "configs", fmt.Sprintf("%s-%d.json", base, i))
+			if !fileExists(candidate) {
+				path = candidate
+				break
+			}
+		}
+	}
+	if err := writeJSONFile(path, root); err != nil {
+		return err
+	}
+	if err := a.loadAll(); err != nil {
+		return err
+	}
+	a.appendLog("配置", "云盘目的地已保存："+filepath.Base(path))
+	return nil
 }
 
 func (a *app) queueTasksLocked(indexes []int) int {
@@ -830,6 +1084,31 @@ func safeFileName(text string) string {
 		value += ".json"
 	}
 	return value
+}
+
+func safeRemoteName(text string) string {
+	var builder strings.Builder
+	for _, ch := range strings.TrimSpace(text) {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' {
+			builder.WriteRune(ch)
+		} else if ch == '-' || ch == ' ' {
+			builder.WriteRune('_')
+		}
+	}
+	value := strings.Trim(builder.String(), "_")
+	for strings.Contains(value, "__") {
+		value = strings.ReplaceAll(value, "__", "_")
+	}
+	return value
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func (a *app) rcloneConfigPath() string {
+	return filepath.Join(a.dataDir, "rclone.conf")
 }
 
 func writeJSONFile(path string, value any) error {

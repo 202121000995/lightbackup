@@ -76,11 +76,30 @@ Linux Server Web 版：
 
 - 浏览器管理任务列表、定时时间、源目录、目的地和按日期目录
 - 浏览器查看、保存、新建和删除 `configs/*.json` 目的地配置
+- Google Drive / OneDrive 云盘授权向导，自动生成目的地配置
 - 立即执行所有已开启任务，或单独测试某个任务
 - 执行中可停止当前任务并清空等待队列
 - 常驻进程内置定时器，适合 systemd 托管
 - 运行日志写入 `logs/yyyy-mm-dd.log`，网页保留最近 500 行
 - 继续使用同一套 `tasks.json` 和 `configs/*.json`
+
+## Google Drive / OneDrive
+
+Linux Server Web 版支持在网页中新增 Google Drive 和 OneDrive 目的地。进入网页后，在“目的地配置”区域点击 `Google` 或 `OneDrive`，填写名称、remote 和云盘目录，再点击“开始授权”。
+
+授权过程由 rclone 负责。对于没有桌面浏览器的服务器，页面会提示在一台有浏览器的电脑上运行类似命令：
+
+```bash
+rclone authorize "drive"
+```
+
+或：
+
+```bash
+rclone authorize "onedrive"
+```
+
+浏览器登录完成后，把 rclone 输出的授权结果粘贴回网页即可。OneDrive 如果继续要求选择个人盘、企业盘或 drive，会继续在网页里显示下一步问题。完成后程序会自动生成目的地配置，并把 token 保存在数据目录的 `rclone.conf` 中。
 
 ## 目录结构
 

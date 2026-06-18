@@ -170,6 +170,37 @@ const indexHTML = `<!doctype html>
     }
     .editor label { color: var(--muted); font-size: 13px; padding-top: 7px; }
     .editor textarea { grid-column: 1 / -1; }
+    .cloud-panel {
+      border-top: 1px solid var(--line);
+      padding: 12px 14px 14px;
+      display: grid;
+      grid-template-columns: 120px 1fr 1fr;
+      gap: 10px;
+      align-items: center;
+      background: #fbfcfe;
+    }
+    .cloud-panel label { color: var(--muted); font-size: 13px; }
+    .cloud-panel .wide { grid-column: 2 / -1; }
+    .cloud-question {
+      grid-column: 1 / -1;
+      display: none;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 10px;
+    }
+    .cloud-question pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      margin: 8px 0;
+      color: #334155;
+      background: #f8fafc;
+      border: 1px solid #e5eaf0;
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
     .log {
       grid-column: 1 / -1;
     }
@@ -247,6 +278,8 @@ const indexHTML = `<!doctype html>
         <button id="newFtpBtn">FTP</button>
         <button id="newWebdavBtn">WebDAV</button>
         <button id="newS3Btn">S3</button>
+        <button id="cloudDriveBtn">Google</button>
+        <button id="cloudOneDriveBtn">OneDrive</button>
       </div>
       <div class="table-wrap">
         <table class="destinations">
@@ -264,6 +297,24 @@ const indexHTML = `<!doctype html>
           <button class="danger" id="deleteDestinationBtn">删除目的地</button>
         </div>
       </div>
+      <div class="cloud-panel">
+        <label for="cloudName">云盘名称</label>
+        <input id="cloudName" placeholder="例如 Google Drive">
+        <input id="cloudRemote" placeholder="remote，例如 gdrive">
+        <label for="cloudPath">云盘目录</label>
+        <input id="cloudPath" class="wide" placeholder="例如 LightBackup/server-1">
+        <div></div>
+        <div class="wide">
+          <button id="startCloudBtn">开始授权</button>
+        </div>
+        <div class="cloud-question" id="cloudQuestion">
+          <strong id="cloudQuestionTitle"></strong>
+          <pre id="cloudQuestionHelp"></pre>
+          <select id="cloudExampleSelect"></select>
+          <textarea id="cloudResult" spellcheck="false" placeholder="把授权结果或当前问题答案粘贴在这里"></textarea>
+          <button id="continueCloudBtn">继续</button>
+        </div>
+      </div>
     </section>
     <section class="log">
       <div class="section-head">
@@ -275,7 +326,7 @@ const indexHTML = `<!doctype html>
     </section>
   </main>
   <script>
-    const state = { tasks: [], destinations: [], selectedDestination: -1 };
+    const state = { tasks: [], destinations: [], selectedDestination: -1, cloudProvider: "drive", cloudSession: null };
     const $ = (id) => document.getElementById(id);
 
     function destinationOptions(selected) {
@@ -390,6 +441,36 @@ const indexHTML = `<!doctype html>
         "</div>"
       ).join("");
       $("logRows").scrollTop = $("logRows").scrollHeight;
+    }
+
+    function prepareCloud(provider) {
+      state.cloudProvider = provider;
+      state.cloudSession = null;
+      $("cloudQuestion").style.display = "none";
+      if (provider === "drive") {
+        $("cloudName").value = "Google Drive";
+        $("cloudRemote").value = "gdrive";
+      } else {
+        $("cloudName").value = "OneDrive";
+        $("cloudRemote").value = "onedrive";
+      }
+      $("cloudPath").value = "LightBackup/server-1";
+    }
+
+    function renderCloudSession(session) {
+      state.cloudSession = session;
+      const question = session.question || {};
+      const option = question.Option || question.option || {};
+      $("cloudQuestion").style.display = "block";
+      $("cloudQuestionTitle").textContent = option.Name ? "需要填写：" + option.Name : "继续授权";
+      $("cloudQuestionHelp").textContent = (question.Error ? question.Error + "\n\n" : "") + (option.Help || "");
+      $("cloudResult").value = option.Default == null ? "" : String(option.Default);
+      const examples = option.Examples || [];
+      $("cloudExampleSelect").innerHTML = "<option value=\"\">选择预设答案</option>" + examples.map((example) => {
+        const value = escapeHTML(example.Value ?? "");
+        const help = escapeHTML(example.Help || value);
+        return "<option value=\"" + value + "\">" + help + "</option>";
+      }).join("");
     }
 
     async function refresh() {
@@ -536,6 +617,47 @@ const indexHTML = `<!doctype html>
       $("destinationFile").value = "s3.json";
       $("destinationJSON").value = JSON.stringify(destinationTemplate("s3"), null, 2);
     });
+    $("cloudDriveBtn").addEventListener("click", () => prepareCloud("drive"));
+    $("cloudOneDriveBtn").addEventListener("click", () => prepareCloud("onedrive"));
+    $("cloudExampleSelect").addEventListener("change", () => {
+      if ($("cloudExampleSelect").value !== "") $("cloudResult").value = $("cloudExampleSelect").value;
+    });
+    $("startCloudBtn").addEventListener("click", async () => {
+      try {
+        const payload = {
+          provider: state.cloudProvider,
+          name: $("cloudName").value.trim(),
+          remote: $("cloudRemote").value.trim(),
+          remote_path: $("cloudPath").value.trim()
+        };
+        const result = await postJSON("/api/cloud/start", payload);
+        if (result.complete) {
+          state.selectedDestination = -1;
+          await refresh();
+          alert("云盘目的地已保存");
+        } else {
+          renderCloudSession(result.session);
+        }
+      } catch (err) { alert(err.message); }
+    });
+    $("continueCloudBtn").addEventListener("click", async () => {
+      if (!state.cloudSession) return;
+      try {
+        const result = await postJSON("/api/cloud/continue", {
+          session_id: state.cloudSession.id,
+          result: $("cloudResult").value.trim()
+        });
+        if (result.complete) {
+          state.cloudSession = null;
+          $("cloudQuestion").style.display = "none";
+          state.selectedDestination = -1;
+          await refresh();
+          alert("云盘目的地已保存");
+        } else {
+          renderCloudSession(result.session);
+        }
+      } catch (err) { alert(err.message); }
+    });
     $("saveDestinationBtn").addEventListener("click", async () => {
       try {
         const content = JSON.parse($("destinationJSON").value);
@@ -555,6 +677,7 @@ const indexHTML = `<!doctype html>
         await refresh();
       } catch (err) { alert(err.message); }
     });
+    prepareCloud("drive");
     refresh().catch((err) => alert(err.message));
     setInterval(() => refresh().catch(() => {}), 5000);
   </script>
