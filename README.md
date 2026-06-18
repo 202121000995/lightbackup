@@ -69,6 +69,7 @@ Windows 桌面版：
 - 右侧选择目的地后自动带入当前任务的目的地下拉框
 - 双击目的地配置行可直接编辑常用连接参数
 - 目的地编辑窗口会按协议只显示需要填写的参数，避免混填
+- 目的地编辑窗口支持 Google Drive / OneDrive 授权云盘
 - 内置 `rclone.exe`
 - 支持本地复制、FTP、WebDAV、Cloudflare R2、AWS S3、七牛对象存储
 
@@ -85,9 +86,9 @@ Linux Server Web 版：
 
 ## Google Drive / OneDrive
 
-Linux Server Web 版支持在网页中新增 Google Drive 和 OneDrive 目的地。进入网页后，在“目的地配置”区域点击 `Google` 或 `OneDrive`，填写名称、remote 和云盘目录，再点击“开始授权”。
+Linux Server Web 版和 Windows 版都支持新增 Google Drive 和 OneDrive 目的地。Linux 网页版在“目的地配置”区域点击 `Google` 或 `OneDrive`，填写名称、remote 和云盘目录，再点击“开始授权”。Windows 版在目的地编辑窗口选择 `drive` 或 `onedrive` 后，点击“授权云盘”。
 
-授权过程由 rclone 负责。对于没有桌面浏览器的服务器，页面会提示在一台有浏览器的电脑上运行类似命令：
+授权过程由 rclone 负责。Windows 版会尝试直接打开本机浏览器完成登录。对于没有桌面浏览器的服务器，页面会提示在一台有浏览器的电脑上运行类似命令：
 
 ```bash
 rclone authorize "drive"

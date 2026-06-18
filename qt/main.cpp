@@ -331,6 +331,10 @@ private:
                 destination.address = remoteEnvValue(root, "HOST");
             else if (destination.type == "webdav")
                 destination.address = remoteEnvValue(root, "URL");
+            else if (destination.type == "drive")
+                destination.address = QStringLiteral("Google Drive");
+            else if (destination.type == "onedrive")
+                destination.address = QStringLiteral("Microsoft OneDrive");
             else if (destination.type == "awss3")
                 destination.address = remoteEnvValue(root, "REGION");
             else if (destination.type == "qiniu" || destination.type == "cfr2")
@@ -495,6 +499,105 @@ private:
         return true;
     }
 
+    QString rcloneConfigPath() const {
+        return QDir::toNativeSeparators(appDir + "/rclone.conf");
+    }
+
+    bool readRcloneQuestion(const QByteArray &output, QJsonObject *question) const {
+        const int start = output.indexOf('{');
+        const int end = output.lastIndexOf('}');
+        if (start < 0 || end < start) return false;
+        QJsonParseError error;
+        const QJsonDocument document = QJsonDocument::fromJson(output.mid(start, end - start + 1), &error);
+        if (error.error != QJsonParseError::NoError || !document.isObject()) return false;
+        const QJsonObject object = document.object();
+        if (object.value("State").toString().isEmpty()) return false;
+        *question = object;
+        return true;
+    }
+
+    bool askRcloneAnswer(QWidget *parent, const QJsonObject &question,
+                         QString *answer) const {
+        const QJsonObject option = question.value("Option").toObject();
+        QString help = option.value("Help").toString();
+        const QString error = question.value("Error").toString();
+        if (!error.isEmpty()) help = error + "\n\n" + help;
+        const QJsonArray examples = option.value("Examples").toArray();
+        if (!examples.isEmpty()) {
+            help += QStringLiteral("\n\n可选值：");
+            for (const QJsonValue &value : examples) {
+                const QJsonObject example = value.toObject();
+                help += "\n" + example.value("Value").toVariant().toString()
+                        + "  " + example.value("Help").toString();
+            }
+        }
+        bool ok = false;
+        const QString result = QInputDialog::getMultiLineText(
+            parent,
+            QStringLiteral("云盘授权"),
+            help + QStringLiteral("\n\n请输入授权结果或当前问题答案："),
+            option.value("Default").toVariant().toString(),
+            &ok);
+        if (!ok) return false;
+        *answer = result.trimmed();
+        return true;
+    }
+
+    bool runCloudAuthorization(QWidget *parent, const QString &type,
+                               const QString &remote) {
+        const QString rclonePath = appDir + "/rclone.exe";
+        if (!QFileInfo::exists(rclonePath)) {
+            QMessageBox::warning(parent, QStringLiteral("云盘授权"),
+                                 QStringLiteral("程序目录中缺少 rclone.exe。"));
+            return false;
+        }
+        if (remote.trimmed().isEmpty()) {
+            QMessageBox::warning(parent, QStringLiteral("云盘授权"),
+                                 QStringLiteral("请先填写 remote 名称。"));
+            return false;
+        }
+
+        QString state;
+        QString result;
+        while (true) {
+            QStringList arguments;
+            arguments << "config" << "create" << remote.trimmed() << type;
+            if (type == "drive") arguments << "scope" << "drive";
+            arguments << "config_is_local" << "true";
+            arguments << "--config" << rcloneConfigPath() << "--non-interactive";
+            if (!state.isEmpty())
+                arguments << "--continue" << "--state" << state << "--result" << result;
+
+            QProcess process;
+            process.setProcessChannelMode(QProcess::MergedChannels);
+            process.start(rclonePath, arguments);
+            if (!process.waitForStarted(5000)) {
+                QMessageBox::warning(parent, QStringLiteral("云盘授权"),
+                                     QStringLiteral("无法启动 rclone.exe。"));
+                return false;
+            }
+            process.waitForFinished(-1);
+            const QByteArray output = process.readAllStandardOutput().trimmed();
+            QJsonObject question;
+            if (readRcloneQuestion(output, &question)) {
+                state = question.value("State").toString();
+                if (!askRcloneAnswer(parent, question, &result)) return false;
+                continue;
+            }
+            if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+                QFile::setPermissions(rcloneConfigPath(),
+                                      QFile::ReadOwner | QFile::WriteOwner);
+                QMessageBox::information(parent, QStringLiteral("云盘授权"),
+                                         QStringLiteral("云盘 remote 已写入 rclone.conf。"));
+                return true;
+            }
+            QMessageBox::warning(parent, QStringLiteral("云盘授权"),
+                                 QStringLiteral("rclone 授权失败：\n%1")
+                                     .arg(QString::fromUtf8(output)));
+            return false;
+        }
+    }
+
     bool editDestinationDialog(int row) {
         const bool creating = row < 0 || row >= destinations.size();
         Destination initial;
@@ -513,7 +616,8 @@ private:
         auto nameEdit = new QLineEdit(creating ? QStringLiteral("新目的地") : initial.name);
         auto typeCombo = new QComboBox;
         typeCombo->addItems(QStringList()
-                            << "local" << "ftp" << "webdav" << "awss3" << "cfr2" << "qiniu");
+                            << "local" << "ftp" << "webdav" << "awss3" << "cfr2" << "qiniu"
+                            << "drive" << "onedrive");
         typeCombo->setCurrentText(creating ? "ftp" : initial.type);
         auto remoteEdit = new QLineEdit(creating ? "new_backup" : initial.remote);
         auto remotePathEdit = new QLineEdit(creating ? "backups/001" : initial.path);
@@ -557,11 +661,15 @@ private:
         layout->addLayout(form);
 
         auto hint = new QLabel(QStringLiteral(
-            "同协议的多个目的地必须使用不同的名称、remote 名称和环境变量前缀。\n"
-            "保存时程序会根据 remote 名称自动生成 RCLONE_CONFIG_ 前缀。"));
+            "同协议的多个目的地必须使用不同的名称和 remote 名称。\n"
+            "FTP、WebDAV、对象存储会按 remote 生成环境变量前缀；云盘会使用 rclone.conf。"));
         hint->setWordWrap(true);
         hint->setObjectName("HintText");
         layout->addWidget(hint);
+
+        auto authorizeCloud = new QPushButton(QStringLiteral("授权云盘"));
+        authorizeCloud->setVisible(false);
+        layout->addWidget(authorizeCloud);
 
         auto buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
         buttons->button(QDialogButtonBox::Save)->setText(QStringLiteral("保存"));
@@ -578,6 +686,7 @@ private:
             const bool local = type == "local";
             const bool ftp = type == "ftp";
             const bool webdav = type == "webdav";
+            const bool cloud = type == "drive" || type == "onedrive";
             const bool objectStore = type == "awss3" || type == "cfr2" || type == "qiniu";
 
             if (creating && !initializing) {
@@ -624,11 +733,22 @@ private:
                     addressEdit->setText("https://s3-cn-east-1.qiniucs.com");
                     accessKeyEdit->clear();
                     secretKeyEdit->clear();
+                } else if (type == "drive") {
+                    nameEdit->setText(QStringLiteral("Google Drive"));
+                    remoteEdit->setText("gdrive");
+                    remotePathEdit->setText("LightBackup");
+                    addressEdit->clear();
+                } else if (type == "onedrive") {
+                    nameEdit->setText(QStringLiteral("OneDrive"));
+                    remoteEdit->setText("onedrive");
+                    remotePathEdit->setText("LightBackup");
+                    addressEdit->clear();
                 }
             }
 
             remotePathLabel->setText(objectStore ? QStringLiteral("Bucket/目录")
-                                                 : QStringLiteral("远端目录"));
+                                                 : cloud ? QStringLiteral("云盘目录")
+                                                         : QStringLiteral("远端目录"));
             if (ftp) addressLabel->setText(QStringLiteral("FTP 主机"));
             else if (webdav) addressLabel->setText(QStringLiteral("WebDAV URL"));
             else if (type == "awss3") addressLabel->setText(QStringLiteral("AWS 区域"));
@@ -636,9 +756,11 @@ private:
             else if (type == "qiniu") addressLabel->setText(QStringLiteral("七牛 Endpoint"));
             passLabel->setText(webdav ? QStringLiteral("WebDAV 密码") : QStringLiteral("FTP 密码"));
 
-            remoteEdit->setPlaceholderText("例如 ftp_backup、qiniu_east");
+            remoteEdit->setPlaceholderText(cloud ? "例如 gdrive、onedrive"
+                                                 : "例如 ftp_backup、qiniu_east");
             remotePathEdit->setPlaceholderText(objectStore ? "例如 bucket-name/backups/project-a"
-                                                           : "例如 backups/project-a");
+                                                           : cloud ? "例如 LightBackup/server-1"
+                                                                   : "例如 backups/project-a");
             localPathEdit->setPlaceholderText("例如 D:\\Backups");
             portEdit->setPlaceholderText("默认 21");
             userEdit->setPlaceholderText(ftp ? "FTP 用户名" : "WebDAV 用户名");
@@ -650,18 +772,23 @@ private:
             setRowVisible(form->labelForField(remoteEdit), remoteEdit, !local);
             setRowVisible(remotePathLabel, remotePathEdit, !local);
             setRowVisible(localPathLabel, localPathEdit, local);
-            setRowVisible(addressLabel, addressEdit, !local);
+            setRowVisible(addressLabel, addressEdit, !local && !cloud);
             setRowVisible(portLabel, portEdit, ftp);
             setRowVisible(userLabel, userEdit, ftp || webdav);
             setRowVisible(passLabel, passEdit, ftp || webdav);
             setRowVisible(accessKeyLabel, accessKeyEdit, objectStore);
             setRowVisible(secretKeyLabel, secretKeyEdit, objectStore);
             setRowVisible(vendorLabel, vendorEdit, webdav);
+            authorizeCloud->setVisible(cloud);
 
             initializing = false;
             dialog.adjustSize();
         };
         connect(typeCombo, &QComboBox::currentTextChanged, &dialog, updateVisibility);
+        connect(authorizeCloud, &QPushButton::clicked, &dialog, [&]() {
+            runCloudAuthorization(&dialog, typeCombo->currentText(),
+                                  remoteEdit->text().trimmed());
+        });
         updateVisibility();
 
         connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -732,9 +859,15 @@ private:
                 return;
             }
             const bool objectStore = type == "awss3" || type == "cfr2" || type == "qiniu";
+            const bool cloud = type == "drive" || type == "onedrive";
             if (objectStore && remotePathEdit->text().trimmed().isEmpty()) {
                 QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
                                      QStringLiteral("对象存储必须填写 Bucket/目录。"));
+                return;
+            }
+            if (cloud && remotePathEdit->text().trimmed().isEmpty()) {
+                QMessageBox::warning(&dialog, QStringLiteral("保存目的地"),
+                                     QStringLiteral("云盘目的地必须填写云盘目录。"));
                 return;
             }
             if (objectStore && addressEdit->text().trimmed().isEmpty()) {
@@ -759,7 +892,7 @@ private:
 
         QJsonObject root;
         root.insert("_important", QStringLiteral(
-            "同协议多个目的地必须分别使用不同文件、name、rclone.remote 和 RCLONE_CONFIG_前缀。"));
+            "同协议多个目的地必须分别使用不同文件、name 和 rclone.remote。"));
         QJsonArray rules;
         rules.append(QStringLiteral("本文件由界面生成；复制后请修改 name 和 remote。"));
         rules.append(QStringLiteral("环境变量前缀由 remote 自动生成，请勿与其他目的地重复。"));
@@ -794,6 +927,8 @@ private:
                            ? "other" : vendorEdit->text().trimmed());
                 env.insert(prefix + "USER", userEdit->text().trimmed());
                 env.insert(prefix + "PASS", passEdit->text().trimmed());
+            } else if (type == "drive" || type == "onedrive") {
+                env.insert("RCLONE_CONFIG", rcloneConfigPath());
             } else {
                 env.insert(prefix + "TYPE", "s3");
                 env.insert(prefix + "PROVIDER",
